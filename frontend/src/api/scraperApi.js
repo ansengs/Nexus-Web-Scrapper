@@ -43,4 +43,8 @@ export const explainQuery = async (query) => {
   return data;
 };
 
-export const proxyUrl = (url) => `${API_BASE}/proxy?url=${encodeURIComponent(url)}`;
+export const proxyUrl = (url) =>
+  url ? `${API_BASE}/proxy?url=${encodeURIComponent(url)}` : '';
+
+export const proxyRaw = (url) =>
+  url ? `${API_BASE}/proxy/raw?url=${encodeURIComponent(url)}` : '';

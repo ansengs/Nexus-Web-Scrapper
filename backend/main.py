@@ -72,16 +72,16 @@ async def root():
 async def search(req: SearchRequest):
     """
     Process a natural-language scraping query.
-    1. NLP classifies intent + extracts target
+    1. NLP classifies intent + extracts target + topic
     2. Target URL resolved
-    3. Page scraped according to intent
+    3. Page scraped (single-page or multi-page crawl depending on intent)
     4. Result persisted to SQLite and returned
     """
     if not req.query.strip():
         raise HTTPException(400, "Query cannot be empty")
 
-    # NLP processing
-    intent, target = nlp.process_query(req.query)
+    # NLP processing — returns intent, target, AND topic
+    intent, target, topic = nlp.process_query(req.query)
 
     # URL resolution (potentially slow – runs in thread pool to avoid blocking)
     loop = asyncio.get_event_loop()
@@ -94,9 +94,11 @@ async def search(req: SearchRequest):
             "Try including the full domain (e.g. example.com)"
         )
 
-    # Scrape
+    # Scrape (crawler path for 'inquiry' — may take several seconds)
     try:
-        results = await loop.run_in_executor(None, scraper.scrape, url, intent)
+        results = await loop.run_in_executor(
+            None, scraper.scrape, url, intent, topic
+        )
     except Exception as exc:
         raise HTTPException(502, f"Scraping error: {exc}")
 
@@ -115,6 +117,7 @@ async def search(req: SearchRequest):
         "session_id": session_id,
         "intent":     intent,
         "target":     target,
+        "topic":      topic,
         "url":        url,
         "results":    results,
     }
@@ -170,18 +173,65 @@ async def interact(req: InteractRequest):
 @app.get("/proxy")
 async def proxy_page(url: str = Query(...)):
     """
-    Proxy a webpage for inline iframe rendering.
-    Strips X-Frame-Options equivalent and injects base href.
+    Full reverse-proxy for iframe rendering.
+    - Strips X-Frame-Options and Content-Security-Policy from upstream response
+    - Rewrites relative asset paths using <base href>
+    - Rewrites absolute links to stay within the proxy
+    - Returns permissive framing headers so the iframe can render it
     """
     loop = asyncio.get_event_loop()
-    html = await loop.run_in_executor(None, scraper.fetch_proxied, url)
+    html, content_type, error = await loop.run_in_executor(
+        None, scraper.fetch_proxied_full, url
+    )
+
+    if error:
+        # Return a simple error page that still renders in the iframe
+        html = f"""<!DOCTYPE html><html><body style="
+            background:#060810;color:#ff4081;font-family:monospace;
+            padding:24px;font-size:13px;">
+            <p>⚠ Proxy error: {error}</p>
+            <p style="color:#8892b0;margin-top:8px">
+              Some sites block all external requests.<br>
+              Try opening it directly:
+              <a href="{url}" target="_blank" style="color:#00b894">{url}</a>
+            </p>
+        </body></html>"""
+
     return HTMLResponse(
         content=html,
         headers={
-            "X-Frame-Options": "ALLOWALL",
-            "Content-Security-Policy": "",
+            "X-Frame-Options":          "ALLOWALL",
+            "Content-Security-Policy":  "default-src * 'unsafe-inline' 'unsafe-eval' data: blob:;",
+            "Access-Control-Allow-Origin": "*",
+            "Cache-Control":            "no-store",
         }
     )
+
+
+@app.get("/proxy/raw")
+async def proxy_raw(url: str = Query(...)):
+    """Pass-through proxy for static assets (images, CSS, JS) needed by the iframe."""
+    loop = asyncio.get_event_loop()
+    try:
+        r = await loop.run_in_executor(
+            None,
+            lambda: scraper.session.get(url, timeout=8, stream=False,
+                                        headers={"Referer": url})
+        )
+        from fastapi.responses import Response
+        ct = r.headers.get("content-type", "application/octet-stream")
+        # Strip framing headers from assets too
+        headers = {
+            "Content-Type":             ct,
+            "X-Frame-Options":          "ALLOWALL",
+            "Content-Security-Policy":  "",
+            "Access-Control-Allow-Origin": "*",
+            "Cache-Control":            "public, max-age=3600",
+        }
+        return Response(content=r.content, headers=headers)
+    except Exception as e:
+        from fastapi.responses import Response
+        return Response(status_code=502, content=str(e))
 
 
 @app.get("/nlp/explain")

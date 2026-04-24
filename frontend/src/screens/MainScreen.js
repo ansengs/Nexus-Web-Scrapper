@@ -16,7 +16,7 @@ import Sidebar from '../components/Sidebar';
 
 // ─────────────────────────── Message Types ─────────────────────────────────
 
-function TypingIndicator() {
+function TypingIndicator({ isInquiry }) {
   const dots = [useRef(new Animated.Value(0)).current,
                 useRef(new Animated.Value(0)).current,
                 useRef(new Animated.Value(0)).current];
@@ -36,13 +36,23 @@ function TypingIndicator() {
   }, []);
 
   return (
-    <View style={[msgStyles.bubble, msgStyles.botBubble, { flexDirection: 'row', gap: 6, paddingVertical: 16, paddingHorizontal: 18 }]}>
-      {dots.map((dot, i) => (
-        <Animated.View
-          key={i}
-          style={[msgStyles.typingDot, { opacity: dot, transform: [{ translateY: dot.interpolate({ inputRange: [0, 1], outputRange: [0, -4] }) }] }]}
-        />
-      ))}
+    <View style={[msgStyles.bubble, msgStyles.botBubble]}>
+      <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10, padding: 6 }}>
+        <View style={{ flexDirection: 'row', gap: 6 }}>
+          {dots.map((dot, i) => (
+            <Animated.View
+              key={i}
+              style={[msgStyles.typingDot, {
+                opacity: dot,
+                transform: [{ translateY: dot.interpolate({ inputRange: [0, 1], outputRange: [0, -4] }) }]
+              }]}
+            />
+          ))}
+        </View>
+        {isInquiry && (
+          <Text style={msgStyles.crawlingText}>CRAWLING SITE…</Text>
+        )}
+      </View>
     </View>
   );
 }
@@ -65,7 +75,7 @@ function UserMessage({ text, timestamp }) {
 }
 
 function BotMessage({ message, onPreviewPress }) {
-  if (message.type === 'typing') return <TypingIndicator />;
+  if (message.type === 'typing') return <TypingIndicator isInquiry={message.isInquiry} />;
 
   if (message.type === 'error') {
     return (
@@ -77,6 +87,11 @@ function BotMessage({ message, onPreviewPress }) {
       </View>
     );
   }
+
+  // For inquiry results, open the top-ranked match URL in preview, not the root domain
+  const previewUrl = message.intent === 'inquiry'
+    ? (message.results?.matches?.[0]?.url || message.url)
+    : message.url;
 
   return (
     <View style={msgStyles.botRow}>
@@ -93,7 +108,7 @@ function BotMessage({ message, onPreviewPress }) {
               results={message.results}
               url={message.url}
               intent={message.intent}
-              onPreviewPress={() => onPreviewPress(message.url)}
+              onPreviewPress={(url) => onPreviewPress(url || previewUrl)}
             />
           )}
         </View>
@@ -116,7 +131,8 @@ const INTENTS = [
   { key: 'contact',     label: 'Contact',     icon: 'call-outline',          color: '#00e676' },
   { key: 'services',    label: 'Services',    icon: 'briefcase-outline',     color: '#4a90e2' },
   { key: 'history',     label: 'History',     icon: 'time-outline',          color: '#b78bff' },
-  { key: 'description', label: 'Description', icon: 'document-text-outline', color: '#ffab40' },
+  { key: 'description', label: 'Describe',    icon: 'document-text-outline', color: '#ffab40' },
+  { key: 'inquiry',     label: 'Inquiry',     icon: 'search-outline',        color: '#00f5d4' },
 ];
 
 function IntentPicker({ selected, onChange }) {
@@ -183,11 +199,21 @@ export default function MainScreen() {
       setSessionId(sid);
       const msgs = [];
       for (const s of session.searches) {
-        msgs.push({ id: `u-${s.id}`, role: 'user', text: s.query, timestamp: s.timestamp });
         msgs.push({
-          id: `b-${s.id}`, role: 'bot',
-          text: `→ ${s.intent.toUpperCase()} query resolved to ${s.url}`,
-          results: s.results, url: s.url, intent: s.intent,
+          id: `u-${s.id}`, role: 'user', text: s.query, timestamp: s.timestamp,
+        });
+        const topic   = s.results?.topic || '';
+        const stats   = s.results?.stats;
+        const topicLabel = topic ? ` · "${topic}"` : '';
+        const crawlLabel = stats ? ` · ${stats.page_count} pages crawled` : '';
+        msgs.push({
+          id:        `b-${s.id}`,
+          role:      'bot',
+          text:      `→ ${s.intent.toUpperCase()}${topicLabel} · ${s.url}${crawlLabel}`,
+          results:   s.results,
+          url:       s.url,
+          intent:    s.intent,
+          topic:     topic,
           timestamp: s.timestamp,
         });
       }
@@ -206,20 +232,24 @@ export default function MainScreen() {
 
     const ts = new Date().toISOString();
     const userMsg = { id: `u-${ts}`, role: 'user', text: q, timestamp: ts };
-    const typingMsg = { id: 'typing', role: 'bot', type: 'typing' };
+
+    // Detect if this will likely be an inquiry so the typing indicator can say "crawling"
+    const looksLikeInquiry = intent === 'inquiry' || intent === 'auto';
+    const typingMsg = { id: 'typing', role: 'bot', type: 'typing', isInquiry: looksLikeInquiry };
 
     setMessages(prev => [...prev, userMsg, typingMsg]);
     setLoading(true);
 
     try {
-      // Optionally inject intent into query
+      // Optionally inject intent into query when user selected a chip
       let query = q;
       if (intent !== 'auto') {
         const prefixes = {
           contact:     'Get contact information for',
-          services:    'What services does',
+          services:    'What services and products does',
           history:     'Tell me the history of',
           description: 'Describe',
+          inquiry:     'Find information about',
         };
         if (prefixes[intent] && !q.toLowerCase().includes(intent)) {
           query = `${prefixes[intent]} ${q}`;
@@ -228,10 +258,17 @@ export default function MainScreen() {
 
       const data = await sendSearch(query, sessionId);
 
+      // Build a human-readable label from intent + topic
+      const topicLabel = data.topic ? ` · "${data.topic}"` : '';
+      const crawlStats = data.results?.stats
+        ? ` · ${data.results.stats.page_count} pages crawled`
+        : '';
+
       const botMsg = {
         id: `b-${ts}`, role: 'bot',
-        text: `→ ${data.intent.toUpperCase()} · ${data.target}`,
+        text: `→ ${data.intent.toUpperCase()}${topicLabel} · ${data.target}${crawlStats}`,
         results: data.results, url: data.url, intent: data.intent,
+        topic: data.topic || '',
         timestamp: new Date().toISOString(),
       };
 
@@ -255,10 +292,12 @@ export default function MainScreen() {
   };
 
   const QUICK_PROMPTS = [
-    'Contact info for apple.com',
-    'Services offered by stripe.com',
-    'History of tesla.com',
-    'Describe what vercel.com does',
+    { text: 'Latest iPhone from apple.com',       icon: 'search-outline'         },
+    { text: 'Contact info for stripe.com',         icon: 'call-outline'           },
+    { text: 'Services offered by anthropic.com',  icon: 'briefcase-outline'      },
+    { text: 'History of tesla.com',               icon: 'time-outline'           },
+    { text: 'MacBook Pro price from apple.com',   icon: 'pricetag-outline'       },
+    { text: 'Describe what vercel.com does',      icon: 'document-text-outline'  },
   ];
 
   return (
@@ -332,10 +371,10 @@ export default function MainScreen() {
                     <TouchableOpacity
                       key={i}
                       style={styles.quickPromptBtn}
-                      onPress={() => setInputText(p)}
+                      onPress={() => setInputText(p.text)}
                     >
-                      <Ionicons name="arrow-forward-outline" size={11} color={colors.accentTeal} />
-                      <Text style={styles.quickPromptText}>{p}</Text>
+                      <Ionicons name={p.icon} size={12} color={colors.accentTeal} />
+                      <Text style={styles.quickPromptText}>{p.text}</Text>
                     </TouchableOpacity>
                   ))}
                 </View>
@@ -360,7 +399,7 @@ export default function MainScreen() {
                   style={styles.input}
                   value={inputText}
                   onChangeText={setInputText}
-                  placeholder={`Search... (e.g. "contact info for stripe.com")`}
+                  placeholder={`Ask anything... e.g. "latest iPhone from apple.com"`}
                   placeholderTextColor={colors.textMuted}
                   multiline
                   maxLength={500}
@@ -488,6 +527,13 @@ const msgStyles = StyleSheet.create({
     height: 7,
     borderRadius: 4,
     backgroundColor: colors.accentTeal,
+  },
+  crawlingText: {
+    fontFamily: fonts.mono,
+    fontSize: 10,
+    color: colors.accentTeal,
+    letterSpacing: 2,
+    opacity: 0.8,
   },
   timestamp: {
     fontFamily: fonts.mono,

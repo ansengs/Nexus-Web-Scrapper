@@ -10,6 +10,7 @@ const INTENT_META = {
   services:    { label: 'SERVICES',      icon: 'briefcase',       color: '#4a90e2' },
   history:     { label: 'HISTORY',       icon: 'time',            color: '#b78bff' },
   description: { label: 'DESCRIPTION',  icon: 'document-text',   color: '#ffab40' },
+  inquiry:     { label: 'INQUIRY',       icon: 'search',          color: '#00f5d4' },
   general:     { label: 'GENERAL',       icon: 'globe',           color: '#00f5d4' },
 };
 
@@ -131,12 +132,91 @@ export default function ResultsCard({ results, url, intent, onPreviewPress }) {
       ) : null}
 
       {/* Expanded Content */}
-      {expanded && <ResultsBody results={results} intent={intent} meta={meta} />}
+      {expanded && <ResultsBody results={results} intent={intent} meta={meta} onPreviewPress={onPreviewPress} />}
     </View>
   );
 }
 
-function ResultsBody({ results, intent, meta }) {
+function InquiryMatch({ match, index, onPreviewPress }) {
+  const [expanded, setExpanded] = useState(false);
+  const scoreColor = match.score > 50 ? '#00e676' : match.score > 20 ? '#00f5d4' : '#4a90e2';
+
+  return (
+    <TouchableOpacity
+      style={styles.matchCard}
+      onPress={() => setExpanded(e => !e)}
+      activeOpacity={0.8}
+    >
+      {/* Match header */}
+      <View style={styles.matchHeader}>
+        <View style={[styles.matchRank, { borderColor: scoreColor + '55' }]}>
+          <Text style={[styles.matchRankText, { color: scoreColor }]}>
+            {String(index + 1).padStart(2, '0')}
+          </Text>
+        </View>
+        <View style={{ flex: 1, gap: 2 }}>
+          <Text style={styles.matchTitle} numberOfLines={expanded ? undefined : 1}>
+            {match.title || match.url}
+          </Text>
+          <Text style={styles.matchUrl} numberOfLines={1}>{match.url}</Text>
+        </View>
+        <View style={styles.matchRight}>
+          <View style={[styles.scoreBadge, { borderColor: scoreColor + '44' }]}>
+            <Text style={[styles.scoreText, { color: scoreColor }]}>
+              {Math.round(match.score)}
+            </Text>
+          </View>
+          <Ionicons
+            name={expanded ? 'chevron-up' : 'chevron-down'}
+            size={13} color={colors.textMuted}
+          />
+        </View>
+      </View>
+
+      {/* Snippet (always shown) */}
+      {match.snippet ? (
+        <Text style={styles.matchSnippet} numberOfLines={expanded ? undefined : 2}>
+          {match.snippet}
+        </Text>
+      ) : null}
+
+      {/* Expanded detail */}
+      {expanded && (
+        <View style={styles.matchDetail}>
+          {match.headings?.length > 0 && (
+            <View style={{ gap: 3 }}>
+              <Text style={styles.sectionTitle}>HEADINGS</Text>
+              {match.headings.slice(0, 4).map((h, i) => (
+                <Text key={i} style={styles.matchHeading}>• {h}</Text>
+              ))}
+            </View>
+          )}
+          {match.prices?.length > 0 && (
+            <View style={{ gap: 3 }}>
+              <Text style={styles.sectionTitle}>PRICES</Text>
+              <TagList items={match.prices} color="#00e676" />
+            </View>
+          )}
+          {match.matched?.length > 0 && (
+            <View style={{ gap: 3 }}>
+              <Text style={styles.sectionTitle}>MATCHED TERMS</Text>
+              <TagList items={match.matched} color={colors.accentTeal} />
+            </View>
+          )}
+          <TouchableOpacity
+            style={styles.matchPreviewBtn}
+            onPress={(e) => { e.stopPropagation?.(); onPreviewPress?.(match.url); }}
+          >
+            <Ionicons name="browsers-outline" size={12} color={colors.accentTeal} />
+            <Text style={styles.matchPreviewBtnText}>OPEN IN PREVIEW</Text>
+          </TouchableOpacity>
+        </View>
+      )}
+    </TouchableOpacity>
+  );
+}
+
+function ResultsBody({ results, intent, meta, onPreviewPress }) {
   // ── CONTACT ──────────────────────────────────────────────────────────────
   if (intent === 'contact') {
     return (
@@ -236,6 +316,51 @@ function ResultsBody({ results, intent, meta }) {
             <Text style={styles.paragraphText}>{results.overview.slice(0, 500)}…</Text>
           </View>
         ) : null}
+      </View>
+    );
+  }
+
+  // ── INQUIRY (crawl + rank results) ───────────────────────────────────────
+  if (intent === 'inquiry') {
+    const matches = results.matches || [];
+    const stats   = results.stats   || {};
+    return (
+      <View style={styles.body}>
+        {/* Topic + crawl stats banner */}
+        {results.topic ? (
+          <View style={styles.topicBanner}>
+            <Ionicons name="search" size={12} color={colors.accentTeal} />
+            <Text style={styles.topicText}>{results.topic.toUpperCase()}</Text>
+            {stats.page_count != null && (
+              <Text style={styles.statPill}>{stats.page_count} pages · {stats.elapsed_sec}s</Text>
+            )}
+          </View>
+        ) : null}
+
+        {/* Aggregated prices */}
+        {results.prices?.length > 0 && (
+          <View style={styles.section}>
+            <Text style={styles.sectionTitle}>PRICES FOUND</Text>
+            <TagList items={results.prices} color="#00e676" />
+          </View>
+        )}
+
+        {/* Year references */}
+        {results.years?.length > 0 && (
+          <View style={styles.section}>
+            <Text style={styles.sectionTitle}>YEAR REFERENCES</Text>
+            <TagList items={results.years} color="#b78bff" />
+          </View>
+        )}
+
+        {/* Ranked page matches */}
+        {matches.length === 0 ? (
+          <Text style={styles.emptyMatchText}>No matching pages found.</Text>
+        ) : (
+          matches.map((match, i) => (
+            <InquiryMatch key={i} match={match} index={i} onPreviewPress={onPreviewPress} />
+          ))
+        )}
       </View>
     );
   }
@@ -467,5 +592,130 @@ const styles = StyleSheet.create({
     fontSize: 11,
     color: colors.textSecondary,
     flex: 1,
+  },
+
+  // ── Inquiry styles ───────────────────────────────────────────────────────
+  topicBanner: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    paddingVertical: 6,
+    paddingHorizontal: 10,
+    backgroundColor: 'rgba(0,184,148,0.06)',
+    borderRadius: radius.sm,
+    borderWidth: 1,
+    borderColor: 'rgba(0,184,148,0.2)',
+    marginBottom: 4,
+  },
+  topicText: {
+    fontFamily: fonts.uiBold,
+    fontSize: 11,
+    color: colors.accentTeal,
+    letterSpacing: 1.5,
+    flex: 1,
+  },
+  statPill: {
+    fontFamily: fonts.mono,
+    fontSize: 10,
+    color: colors.textMuted,
+  },
+  emptyMatchText: {
+    fontFamily: fonts.ui,
+    fontSize: 13,
+    color: colors.textMuted,
+    textAlign: 'center',
+    paddingVertical: 12,
+  },
+  matchCard: {
+    borderWidth: 1,
+    borderColor: colors.border,
+    borderRadius: radius.md,
+    padding: spacing.sm,
+    marginBottom: spacing.sm,
+    backgroundColor: 'rgba(0,0,0,0.2)',
+    gap: 6,
+  },
+  matchHeader: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: 8,
+  },
+  matchRank: {
+    width: 26, height: 26,
+    borderRadius: radius.sm,
+    borderWidth: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+    flexShrink: 0,
+  },
+  matchRankText: {
+    fontFamily: fonts.mono,
+    fontSize: 10,
+    fontWeight: '600',
+  },
+  matchTitle: {
+    fontFamily: fonts.uiBold,
+    fontSize: 13,
+    color: colors.textPrimary,
+    lineHeight: 18,
+  },
+  matchUrl: {
+    fontFamily: fonts.mono,
+    fontSize: 10,
+    color: colors.accentTeal,
+  },
+  matchRight: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    flexShrink: 0,
+  },
+  scoreBadge: {
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+    borderWidth: 1,
+    borderRadius: radius.sm,
+  },
+  scoreText: {
+    fontFamily: fonts.mono,
+    fontSize: 10,
+    fontWeight: '600',
+  },
+  matchSnippet: {
+    fontFamily: fonts.ui,
+    fontSize: 12,
+    color: colors.textSecondary,
+    lineHeight: 18,
+  },
+  matchDetail: {
+    borderTopWidth: 1,
+    borderTopColor: colors.border,
+    paddingTop: spacing.sm,
+    gap: spacing.sm,
+    marginTop: 4,
+  },
+  matchHeading: {
+    fontFamily: fonts.ui,
+    fontSize: 12,
+    color: colors.textSecondary,
+    lineHeight: 18,
+  },
+  matchPreviewBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    paddingVertical: 6,
+    paddingHorizontal: 10,
+    borderWidth: 1,
+    borderColor: 'rgba(0,184,148,0.3)',
+    borderRadius: radius.sm,
+    alignSelf: 'flex-start',
+    marginTop: 2,
+  },
+  matchPreviewBtnText: {
+    fontFamily: fonts.uiBold,
+    fontSize: 10,
+    color: colors.accentTeal,
+    letterSpacing: 1,
   },
 });

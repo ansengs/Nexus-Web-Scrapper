@@ -59,6 +59,7 @@ export const intentColors = {
   services:    { bg: '#0d1520', border: '#4a90e2', text: '#4a90e2' },
   history:     { bg: '#1a0d20', border: '#b78bff', text: '#b78bff' },
   description: { bg: '#1a1200', border: '#ffab40', text: '#ffab40' },
+  inquiry:     { bg: '#0d1e1e', border: '#00f5d4', text: '#00f5d4' },
   general:     { bg: '#0d1320', border: '#00f5d4', text: '#00f5d4' },
 };
 
